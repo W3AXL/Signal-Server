@@ -1320,28 +1320,33 @@ int main(int argc, char *argv[])
 
                 /* Antenna pattern files have the same basic name as the output file
                  * but with a different extension. If they exist, load them now */
-                if( (az_filename = (char*) calloc(strlen(argv[z]) + strlen(AZ_FILE_SUFFIX) + 1, sizeof(char))) == NULL )
-                    return ENOMEM;
+                size_t base_len = strlen(argv[z]);
+                if(base_len >= sizeof(mapfile)){
+                    spdlog::error("Output name too long (max {} chars)", sizeof(mapfile)-2);
+                    exit(1);
+                }
+                // Copy base name into mapfile and tx_site structures
+                strncpy(mapfile, argv[z], sizeof(mapfile)-1);
+                mapfile[sizeof(mapfile)-1] = '\0';
+                strncpy(tx_site[0].name, "Tx", sizeof(tx_site[0].name)-1);
+                tx_site[0].name[sizeof(tx_site[0].name)-1] = '\0';
+                strncpy(tx_site[0].filename, argv[z], sizeof(tx_site[0].filename)-1);
+                tx_site[0].filename[sizeof(tx_site[0].filename)-1] = '\0';
 
-                strncpy(mapfile, argv[z], 253);
-                strncpy(tx_site[0].name, "Tx", 2);
-                strncpy(tx_site[0].filename, argv[z], 253);
+                const char *az_base = (antenna_file[0] != '\0') ? antenna_file : argv[z];
+                const char *el_base = az_base; // same logic
+                size_t az_needed = strlen(az_base) + strlen(AZ_FILE_SUFFIX) + 1;
+                size_t el_needed = strlen(el_base) + strlen(EL_FILE_SUFFIX) + 1;
 
-                if (antenna_file[0] != '\0')
-                        strcpy(az_filename, antenna_file);
-                else
-                        strcpy(az_filename, argv[z]);
-                strcat(az_filename, AZ_FILE_SUFFIX);
-
-                if( (el_filename = (char*) calloc(strlen(argv[z]) + strlen(EL_FILE_SUFFIX) + 1, sizeof(char))) == NULL ){
+                az_filename = (char*)calloc(az_needed, sizeof(char));
+                if(az_filename == NULL) return ENOMEM;
+                el_filename = (char*)calloc(el_needed, sizeof(char));
+                if(el_filename == NULL){
                     free(az_filename);
                     return ENOMEM;
                 }
-                if (antenna_file[0] != '\0')
-                        strcpy(el_filename, antenna_file);
-                else
-                        strcpy(el_filename, argv[z]);
-                strcat(el_filename, EL_FILE_SUFFIX);
+                snprintf(az_filename, az_needed, "%s%s", az_base, AZ_FILE_SUFFIX);
+                snprintf(el_filename, el_needed, "%s%s", el_base, EL_FILE_SUFFIX);
 
                 if( (result = LoadPAT(az_filename,el_filename)) != 0 ){
                     spdlog::error("Permissions error reading antenna pattern file");
@@ -1355,7 +1360,8 @@ int main(int argc, char *argv[])
                 /* Handle writing image data to stdout */
                 to_stdout = true;
                 mapfile[0] = '\0';
-                strncpy(tx_site[0].name, "Tx", 2);
+                strncpy(tx_site[0].name, "Tx", sizeof(tx_site[0].name)-1);
+                tx_site[0].name[sizeof(tx_site[0].name)-1] = '\0';
                 tx_site[0].filename[0] = '\0';
                 spdlog::error("Writing data to stdout");
             }
