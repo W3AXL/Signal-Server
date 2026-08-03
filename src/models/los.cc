@@ -25,9 +25,6 @@ namespace {
     // Storage for processing threads
     std::vector<std::thread> threads;
 
-    // Storage for processing thread futures
-    std::vector<std::future<void *>> futures;
-
     // Mutex for processed vector
     std::mutex maskMutex;
 
@@ -909,6 +906,9 @@ void PlotLOSMap(struct site source, double altitude, char *plo_filename,
 	double range_max_north[] = {max_north, max_north, min_north, max_north};
 	PropagationRange *r = new PropagationRange[segments];
 
+    // Storage for this call's async worker handles (function-local: never shared across calls or functions)
+    std::vector<std::future<void *>> futures;
+
     // Size our progress vector appropriately
     thread_progress = std::vector<progress_t>(segments);
 
@@ -937,8 +937,15 @@ void PlotLOSMap(struct site source, double altitude, char *plo_filename,
 			rangePropagation(thread_progress[i], &r[i]);
 	}
 
-	if(use_threads)
+	if(use_threads) {
 		finishThreads();
+		// Actually wait for every worker to finish before r is freed below.
+		// finishThreads() only joins the (unused) threads vector; the real
+		// workers are std::async futures and must be awaited explicitly.
+		for (auto &f : futures) {
+			f.get();
+		}
+	}
 
 	delete[] r;
 
@@ -1038,6 +1045,9 @@ void PlotPropagation(struct site source, bbox bounds,
 	
     // Array to hold our edge ranges
     std::vector<PropagationRange> ranges;
+
+    // Storage for this call's async worker handles (function-local: never shared across calls or functions)
+    std::vector<std::future<void *>> futures;
 
     // Create our longitudal (top and bottom edge) ranges
     for (int i = 0; i < lon_edge_segments; i++) {
@@ -1140,11 +1150,23 @@ void PlotPropagation(struct site source, bbox bounds,
         spdlog::debug("Waiting for threads to finish...");
         //finishThreads();
         finishProgress();
+        // finishProgress() only polls progress counters; it does not wait on
+        // the std::async futures themselves. A worker increments its counter
+        // just before its final loop check and cleanup, so finishProgress()
+        // can return while a worker still has one more dereference of its
+        // PropagationRange pointer left to make. Awaiting every future here
+        // is the actual wait; ranges (and its backing storage) must not be
+        // touched until every worker has returned.
+        for (auto &f : futures) {
+            f.get();
+        }
     }
 
-	for(size_t i = 0; i < ranges.size(); i++){
-		ranges.erase(ranges.begin() + i);
-	}
+	// Erasing by index while iterating shifts every later element down and
+	// shrinks size() by one, so this used to skip every other element and
+	// call erase(end()) on the last iteration of an even-sized vector.
+	// All elements are being discarded anyway, so just clear the vector.
+	ranges.clear();
 
     if (fd != NULL)
 		fclose(fd);
@@ -1274,6 +1296,9 @@ void PlotPropagationRadius(struct site source, double range,
     // Size our progress vector appropriately
     thread_progress = std::vector<progress_t>(segments);
 
+    // Storage for this call's async worker handles (function-local: never shared across calls or functions)
+    std::vector<std::future<void *>> futures;
+
     // Init our vector for storing processing progress
     if (!has_init_processed) {
         init_processed();
@@ -1299,6 +1324,11 @@ void PlotPropagationRadius(struct site source, double range,
     {
         spdlog::debug("Waiting for threads to finish...");
         finishThreads();
+        // finishThreads() only joins the (unused) threads vector; the real
+        // workers are std::async futures and must be awaited explicitly.
+        for (auto &f : futures) {
+            f.get();
+        }
     }
 
     // Clean up our radii
